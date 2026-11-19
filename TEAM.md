@@ -1,18 +1,17 @@
 # Team Information
 
-**Course:** _[fill your course code and name]_
+**Course:** _24304 Artificial Intelligence_
 
 **Semester:** Semester 2, 2020
 
-**Instructor:** _[name of your instructor]_
+**Instructor:** _Ahana Deb_
 
 **Team name:** _[replace this with team name in plan text]_
 
 **Team members:**
 
-* Student 1's Student number - Full Name - Student email - Student Github id
-* Student 2's Student number - Full Name - Student email - Student Github id
-* Student 3's Student number - Full Name - Student email - Student Github id
+* 251647 - Tayser Mouffak Ortega - tayser.mouffak01@estudiant.upf.edu - @taysermouffak
+* 219363 - Rubén Castaño Gómez - Student email - @RubenCastanoGomez
 
 Replace the lines above with the correct details of members. Delete or add lines as needed.
 
