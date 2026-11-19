@@ -6,12 +6,12 @@
 
 **Instructor:** _Ahana Deb_
 
-**Team name:** _[replace this with team name in plan text]_
+**Team name:** _PacmanRT_
 
 **Team members:**
 
 * 251647 - Tayser Mouffak Ortega - tayser.mouffak01@estudiant.upf.edu - @taysermouffak
-* 219363 - Rubén Castaño Gómez - Student email - @RubenCastanoGomez
+* 219363 - Rubén Castaño Gómez - ruben.castano01@estudiant.upf.edu - @RubenCastanoGomez
 
 Replace the lines above with the correct details of members. Delete or add lines as needed.
 
