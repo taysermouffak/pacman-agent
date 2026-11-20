@@ -25,7 +25,11 @@ def create_team(first_index, second_index, is_red,
     The tournament calls this function without extra arguments, so the
     default values are the team that will play.
     """
-    return [eval(first)(first_index), eval(second)(second_index)]
+    # Resolve only the agent classes defined in this file. The tournament
+    # uses the defaults, while the mapping still supports explicit options.
+    agent_classes = {'OffensiveAgent': OffensiveAgent,
+                     'DefensiveAgent': DefensiveAgent}
+    return [agent_classes[first](first_index), agent_classes[second](second_index)]
 
 
 ##########
@@ -126,15 +130,22 @@ class BaseAgent(CaptureAgent):
         """Positions of visible enemy Pacmen inside our half."""
         return [pos for _, state, pos in self.visible_enemies(game_state) if state.is_pacman]
 
-    def safe_fallback(self, game_state, threats):
+    def safe_fallback(self, game_state, threats, stay_home=False):
         """
         Used when no path is safe: pick the legal move that keeps the largest
         distance to the threats, breaking ties by getting closer to home.
         """
-        actions = [a for a in game_state.get_legal_actions(self.index) if a != Directions.STOP]
+        my_pos = self.my_position(game_state)
+        actions = []
+        for action in game_state.get_legal_actions(self.index):
+            if action == Directions.STOP:
+                continue
+            dx, dy = Actions.direction_to_vector(action)
+            next_pos = (int(my_pos[0] + dx), int(my_pos[1] + dy))
+            if not stay_home or self.is_home(next_pos):
+                actions.append(action)
         if not actions:
             return Directions.STOP
-        my_pos = self.my_position(game_state)
         best, best_score = None, None
         for action in actions:
             dx, dy = Actions.direction_to_vector(action)
@@ -153,7 +164,9 @@ class OffensiveAgent(BaseAgent):
     brought back to our side).
     """
 
-    CARRY_LIMIT = 6  # food carried before returning home when not in danger
+    # Deposit after a larger haul when the route is safe. Nearby ghosts,
+    # nearly exhausted food and the game clock can still trigger an earlier return.
+    CARRY_LIMIT = 8
 
     def choose_action(self, game_state):
         my_state = game_state.get_agent_state(self.index)
@@ -244,7 +257,8 @@ class DefensiveAgent(BaseAgent):
                     blocked.update(c for c, _ in self.neighbours(p))
                 targets = [c for c in self.cells_at_distance(invaders, 2) if c not in blocked]
                 action = self.first_step_towards(my_pos, targets, blocked)
-                return action if action is not None else self.safe_fallback(game_state, invaders)
+                return action if action is not None else self.safe_fallback(
+                    game_state, invaders, stay_home=True)
             targets = invaders
         elif self.last_eaten is not None:
             targets = [self.last_eaten]
@@ -253,7 +267,14 @@ class DefensiveAgent(BaseAgent):
 
         action = self.first_step_towards(my_pos, targets, self.enemy_side)
         if action is None:
-            legal = [a for a in game_state.get_legal_actions(self.index) if a != Directions.STOP]
+            legal = []
+            for candidate in game_state.get_legal_actions(self.index):
+                if candidate == Directions.STOP:
+                    continue
+                dx, dy = Actions.direction_to_vector(candidate)
+                next_pos = (int(my_pos[0] + dx), int(my_pos[1] + dy))
+                if self.is_home(next_pos):
+                    legal.append(candidate)
             action = random.choice(legal) if legal else Directions.STOP
         return action
 
