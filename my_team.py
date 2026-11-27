@@ -8,6 +8,7 @@
 
 import random
 from collections import deque
+from functools import lru_cache
 
 from contest.capture_agents import CaptureAgent
 from contest.game import Directions, Actions
@@ -305,8 +306,14 @@ class OffensiveAgent(BaseAgent):
         carry_limit = 18 if power_window >= dist_home + 7 else self.CARRY_LIMIT
         if not guard_timers or (not ghosts and dist_home >= 9):
             carry_limit = max(self.CARRY_LIMIT, min(24, dist_home * 2))
+        score = self.get_score(game_state)
+        their_load = sum(enemy.num_carrying for enemy in enemy_states)
+        # Deposit a lead before the clock runs out or another raid can overtake us.
+        seal_lead = (carrying > 0 and moves_left <= 65
+                     and score + carrying > max(0, their_load)
+                     and (score <= their_load or moves_left <= dist_home + 12))
         go_home = carrying > 0 and (
-            len(food) <= 2
+            seal_lead or len(food) <= 2
             or carrying >= carry_limit
             or (0 < power_window <= dist_home + 5 and carrying >= 4)
             or (ghost_dist <= 4 and (carrying >= 3 or ghost_dist <= 2))
@@ -380,6 +387,9 @@ class DefensiveAgent(BaseAgent):
                 action = self.first_step_towards(my_pos, targets, blocked)
                 return action if action is not None else self.safe_fallback(
                     game_state, invaders, stay_home=True)
+            intercept = self.pursue(game_state, my_pos, invaders)
+            if intercept is not None:
+                return intercept
             targets = invaders
         elif self.last_eaten is not None:
             targets = [self.last_eaten]
@@ -398,6 +408,59 @@ class DefensiveAgent(BaseAgent):
                     legal.append(candidate)
             action = random.choice(legal) if legal else Directions.STOP
         return action
+
+    def pursue(self, state, position, invaders):
+        """Plan a short interception with alternating ghost and invader moves."""
+        enemies = [(q, agent.num_carrying) for _, agent, q in self.visible_enemies(state)
+                   if agent.is_pacman and q in invaders]
+        invader, load = min(enemies, key=lambda item: (
+            self.get_maze_distance(position, item[0]) - min(6, item[1]) * 0.55))
+        if load < 5 or self.get_maze_distance(position, invader) > 7:
+            return None
+
+        moves = {}
+        homes = {}
+        distances = {}
+        def distance(a, b):
+            key = (a, b) if a <= b else (b, a)
+            if key not in distances:
+                distances[key] = self.get_maze_distance(a, b)
+            return distances[key]
+
+        def home_distance(q):
+            if q not in homes:
+                homes[q] = self.distance_home(q)
+            return homes[q]
+
+        def adjacent(q):
+            if q not in moves:
+                moves[q] = self.neighbours(q) + [(q, Directions.STOP)]
+            return moves[q]
+
+        @lru_cache(maxsize=None)
+        def value(guard, pacman, remaining, defensive_turn):
+            if guard == pacman:
+                return 100 + remaining
+            if not self.is_home(pacman):
+                return -100 - remaining
+            if remaining == 0:
+                gap = distance(guard, pacman)
+                gates = [g for g in self.home_border if distance(g, pacman) <= home_distance(pacman) + 2]
+                advantage = min(distance(g, pacman) - distance(g, guard) for g in gates)
+                return -gap + min(4, max(-4, advantage)) * 1.1
+            if defensive_turn:
+                return max(value(g, pacman, remaining - 1, False)
+                           for g, _ in adjacent(guard) if self.is_home(g))
+            return min(value(guard, q, remaining - 1, True) for q, _ in adjacent(pacman))
+
+        legal = state.get_legal_actions(self.index)
+        preferred = self.first_step_towards(position, [invader], self.enemy_side)
+        choices = [(q, action) for q, action in adjacent(position)
+                   if self.is_home(q) and action in legal]
+        if choices:
+            return max(choices, key=lambda pair: (value(pair[0], invader, 5, False),
+                                                  pair[1] == preferred, -distance(pair[0], invader)))[1]
+        return None
 
     def update_last_eaten(self, game_state, my_pos):
         """Remembers where our food disappeared since the previous turn."""
