@@ -54,10 +54,12 @@ class BaseAgent(CaptureAgent):
         width = self.walls.width
 
         # The red team owns the left half of the map and the blue team the
-        # right half. border_x is the last column of our own half.
+        # right half. Keep only border cells with an open crossing.
+        # border_x is the last column of our own half.
         self.border_x = width // 2 - 1 if self.red else width // 2
         self.home_border = [(self.border_x, y) for y in range(self.walls.height)
-                            if not self.walls[self.border_x][y]]
+                            if not self.walls[self.border_x][y]
+                            and not self.walls[self.border_x + (1 if self.red else -1)][y]]
 
     # ---------- Map helpers ----------
 
@@ -166,15 +168,24 @@ class OffensiveAgent(BaseAgent):
 
     # Deposit after a larger haul when the route is safe. Nearby ghosts,
     # nearly exhausted food and the game clock can still trigger an earlier return.
-    CARRY_LIMIT = 8
+    CARRY_LIMIT = 11
+
+    def register_initial_state(self, game_state):
+        super().register_initial_state(game_state)
+        self.recent_positions = deque(maxlen=12)
+        self.detour = None
 
     def choose_action(self, game_state):
         my_state = game_state.get_agent_state(self.index)
         my_pos = self.my_position(game_state)
+        self.recent_positions.append(my_pos)
         carrying = my_state.num_carrying
         food = self.get_food(game_state).as_list()
         capsules = self.get_capsules(game_state)
         ghosts = self.dangerous_ghosts(game_state)
+        enemy_states = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
+        guard_timers = [enemy.scared_timer for enemy in enemy_states if not enemy.is_pacman]
+        power_window = min(guard_timers, default=0)
         ghost_dist = min((self.get_maze_distance(my_pos, g) for g in ghosts), default=99)
 
         # While we are a ghost on our own side, eat an invader that is close.
@@ -194,25 +205,73 @@ class OffensiveAgent(BaseAgent):
                 if not self.is_home(cell):
                     blocked.add(cell)
 
+        # A capsule takes effect before collision is checked.
+        blocked.difference_update(capsules)
+
+        # If a guard is holding this entrance, pick another open passage.
+        # Keep the new goal until we reach it, then recheck the crossing.
+        if not my_state.is_pacman and food:
+            if self.detour == my_pos:
+                entry = (my_pos[0] + (1 if self.red else -1), my_pos[1])
+                self.detour = None
+                if entry not in blocked:
+                    return Directions.EAST if self.red else Directions.WEST
+            if self.detour is None and len(self.recent_positions) >= 8 and (
+                    len(set(self.recent_positions)) <= 4 or ghost_dist <= 2):
+                def clearance(gate):
+                    enemy_cell = (gate[0] + (1 if self.red else -1), gate[1])
+                    danger = min((self.get_maze_distance(enemy_cell, g) for g in ghosts), default=9)
+                    return min(danger, 8) * 2 - self.get_maze_distance(my_pos, gate) - (
+                        8 if gate in self.recent_positions else 0)
+                choices = [gate for gate in self.home_border if gate != my_pos]
+                if choices:
+                    self.detour = max(choices, key=clearance)
+            if self.detour is not None:
+                detour_action = self.first_step_towards(my_pos, [self.detour], self.enemy_side_cells())
+                if detour_action is not None:
+                    return detour_action
+                self.detour = None
+        else:
+            self.detour = None
+
         # Decide whether to go back home. Each agent moves once every 4 turns,
         # so timeleft // 4 is the number of moves we still have.
         moves_left = game_state.data.timeleft // 4
         dist_home = self.distance_home(my_pos)
+        # Make longer raids while guards are scared, or when repeated trips
+        # would be expensive and no active guard is visible.
+        carry_limit = 18 if power_window >= dist_home + 7 else self.CARRY_LIMIT
+        if not guard_timers or (not ghosts and dist_home >= 9):
+            carry_limit = max(self.CARRY_LIMIT, min(24, dist_home * 2))
         go_home = carrying > 0 and (
             len(food) <= 2
-            or carrying >= self.CARRY_LIMIT
-            or ghost_dist <= 5
+            or carrying >= carry_limit
+            or (0 < power_window <= dist_home + 5 and carrying >= 4)
+            or (ghost_dist <= 4 and (carrying >= 3 or ghost_dist <= 2))
             or dist_home + 5 >= moves_left)
 
         if go_home:
             targets = self.home_border
+            if capsules and ghost_dist <= 5:
+                escape = min(capsules, key=lambda c: self.get_maze_distance(my_pos, c))
+                if (self.get_maze_distance(my_pos, escape) <= 3
+                        and self.get_maze_distance(my_pos, escape) < dist_home
+                        and all(self.get_maze_distance(escape, g) >= 2 for g in ghosts)):
+                    targets = [escape]
         elif ghost_dist <= 5 and capsules:
             # Chased with a capsule available: eating it scares the ghosts.
             targets = capsules
         else:
             targets = food
+            if capsules and food and power_window < 5 and guard_timers:
+                nearest_capsule = min(self.get_maze_distance(my_pos, c) for c in capsules)
+                nearest_food = min(self.get_maze_distance(my_pos, f) for f in food)
+                if nearest_capsule <= 8 and nearest_capsule <= nearest_food + 5:
+                    targets = capsules
 
         action = self.first_step_towards(my_pos, targets, blocked)
+        if action is None and targets is capsules:
+            action = self.first_step_towards(my_pos, food, blocked)
         if action is None and targets is not self.home_border:
             # The food is not safely reachable: retreat home instead.
             action = self.first_step_towards(my_pos, self.home_border, blocked)
