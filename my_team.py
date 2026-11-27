@@ -176,6 +176,68 @@ class OffensiveAgent(BaseAgent):
         self.detour = None
 
     def choose_action(self, game_state):
+        action = self.plan_action(game_state)
+        state = game_state.get_agent_state(self.index)
+        if not state.is_pacman:
+            return action
+        pos = self.my_position(game_state)
+        guards = [(q, enemy.scared_timer)
+                  for _, enemy, q in self.visible_enemies(game_state)
+                  if not enemy.is_pacman and self.get_maze_distance(pos, q) <= 7]
+        if not guards:
+            return action
+        return self.avoid_trap(game_state, pos, action, guards)
+
+    def avoid_trap(self, state, pos, action, guards):
+        """Check whether nearby ghosts could cut off the chosen route."""
+        capsules = set(self.get_capsules(state))
+        horizon = 6
+        legal = state.get_legal_actions(self.index)
+        choices = [(point, move) for point, move in self.neighbours(pos) if move in legal]
+        if not choices:
+            return action
+        threat_eta = {}
+
+        def danger_at(point):
+            # A ghost cannot capture us before it arrives and its timer expires.
+            if point not in threat_eta:
+                threat_eta[point] = min(max(self.get_maze_distance(point, ghost), timer)
+                                        for ghost, timer in guards)
+            return threat_eta[point]
+
+        def continuation(start):
+            queue = deque([(start, 1)])
+            visited = {start}
+            result = 0
+            clearance = -10
+            while queue:
+                point, step = queue.popleft()
+                # Crossing home or taking a capsule ends this threat model.
+                if self.is_home(point) or point in capsules:
+                    return horizon + 1, -step
+                margin = danger_at(point) - step
+                if margin <= 0:
+                    continue
+                result = max(result, step)
+                clearance = max(clearance, margin)
+                if step < horizon:
+                    for cell, _ in self.neighbours(point):
+                        if cell not in visited:
+                            visited.add(cell)
+                            queue.append((cell, step + 1))
+            return result, clearance
+        ranks = {move: continuation(point) for point, move in choices}
+        planned = ranks.get(action, (0, 0))
+        carrying = state.get_agent_state(self.index).num_carrying
+        if planned[0] >= horizon or (planned[0] >= 3 and not carrying):
+            return action
+        best = max(choices, key=lambda item: (
+            ranks[item[1]], item[1] == action,
+            -self.distance_home(item[0]),
+            -self.recent_positions.count(item[0])))
+        return best[1] if ranks[best[1]][0] > planned[0] else action
+
+    def plan_action(self, game_state):
         my_state = game_state.get_agent_state(self.index)
         my_pos = self.my_position(game_state)
         self.recent_positions.append(my_pos)
